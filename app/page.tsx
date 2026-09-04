@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./clubs.css";
 import {
   INITIAL_CLUBS,
@@ -136,6 +136,11 @@ export default function ClubsPlaybookPage() {
   const [statusFilter, setStatusFilter] = useState<ClubStatus | "all">("all");
   const [copied, setCopied] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [displayRemaining, setDisplayRemaining] = useState(EXISTING_POOL);
+  const [poolPulse, setPoolPulse] = useState(false);
+  const [debits, setDebits] = useState<Array<{ id: number; amount: number }>>([]);
+  const prevSpentRef = useRef<number | null>(null);
+  const displayRemainingRef = useRef(EXISTING_POOL);
 
   useEffect(() => {
     try {
@@ -166,9 +171,53 @@ export default function ClubsPlaybookPage() {
     return () => window.clearInterval(id);
   }, []);
 
+  const spent = spendFromClubs(clubs);
+  const existingLeft = Math.max(0, EXISTING_POOL - spent);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    if (prevSpentRef.current === null) {
+      prevSpentRef.current = spent;
+      displayRemainingRef.current = existingLeft;
+      setDisplayRemaining(existingLeft);
+      return;
+    }
+
+    const prevSpent = prevSpentRef.current;
+    if (spent > prevSpent) {
+      const delta = spent - prevSpent;
+      const chipId = Date.now() + Math.random();
+      setDebits((d) => [...d, { id: chipId, amount: delta }]);
+      setPoolPulse(true);
+      window.setTimeout(() => {
+        setDebits((d) => d.filter((x) => x.id !== chipId));
+      }, 1100);
+      window.setTimeout(() => setPoolPulse(false), 700);
+    }
+    prevSpentRef.current = spent;
+
+    const from = displayRemainingRef.current;
+    const to = existingLeft;
+    if (from === to) return;
+
+    const start = performance.now();
+    const duration = 520;
+    let frame = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const next = Math.round(from + (to - from) * eased);
+      displayRemainingRef.current = next;
+      setDisplayRemaining(next);
+      if (t < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [spent, existingLeft, hydrated]);
+
   const selected = clubs.find((c) => c.id === selectedId) || null;
   const remaining = daysUntil(EXISTING_DEADLINE);
-  const spent = spendFromClubs(clubs);
   const deadlineLabel = formatDeadline(EXISTING_DEADLINE);
 
   const stats = useMemo(() => {
@@ -271,24 +320,30 @@ export default function ClubsPlaybookPage() {
             </div>
           </div>
 
-          <div className="clubs-panel clubs-budget-grid">
-            <div>
-              <div className="clubs-kicker">Pilot pool</div>
-              <div className="clubs-budget-big">${PILOT_TOTAL.toLocaleString()}</div>
+          <div className={`clubs-panel clubs-budget-grid${poolPulse ? " pool-pulse" : ""}`}>
+            <div className="clubs-budget-hero">
+              <div className="clubs-kicker">Existing pool remaining</div>
+              <div className="clubs-budget-big-wrap">
+                <div className="clubs-budget-big">${displayRemaining.toLocaleString()}</div>
+                {debits.map((d) => (
+                  <span key={d.id} className="clubs-debit-chip" aria-hidden>
+                    −${d.amount}
+                  </span>
+                ))}
+              </div>
+              <div className="clubs-budget-sub">
+                of ${EXISTING_POOL.toLocaleString()} existing · ${PILOT_TOTAL.toLocaleString()} total pilot
+              </div>
             </div>
             <div className="clubs-budget-split">
               <div className="clubs-mini">
-                <b>${EXISTING_POOL.toLocaleString()}</b>
-                <span>Existing max (14 × $75)</span>
+                <b>${spent}</b>
+                <span>Committed from payouts</span>
               </div>
               <div className="clubs-mini">
                 <b>${NET_NEW_RESERVE}</b>
                 <span>Net-new reserve</span>
               </div>
-            </div>
-            <div className="clubs-mini">
-              <b>${spent}</b>
-              <span>Committed from tracker payouts · ${EXISTING_POOL - spent} left in existing pool</span>
             </div>
             <div className="clubs-deadline">
               <span>Existing clubs deadline · {deadlineLabel}</span>
